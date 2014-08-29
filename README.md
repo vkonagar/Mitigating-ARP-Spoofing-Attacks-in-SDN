@@ -2,7 +2,7 @@ ARP-Cache-Posioning-Attack-Mitigator-SDN
 ========================================
 
 This is a controller Application on POX which will mitigate ARP cache poisoning attacks in SDN networks.
-'''
+ ````python
 def _handle_PacketIn (self, event):
     packet = event.parsed
     if packet.type == packet.ARP_TYPE:
@@ -24,4 +24,4 @@ def _handle_PacketIn (self, event):
             print "It's a reply; do something cool"
         else:
             print "Some other ARP opcode, probably do something smart here"
-'''
+````
