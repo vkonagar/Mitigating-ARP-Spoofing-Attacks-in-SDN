@@ -1,7 +1,13 @@
 ARP-Cache-Posioning-Attack-Mitigator-SDN
 ========================================
 
-This is a controller Application on POX which will mitigate ARP cache poisoning attacks in SDN networks.
+
+Welcome! I am trying to a make an Application over POX in SDN which can help current SDN enabled networks to perform with more resiliency.
+
+* This will prevent LAN attackers from poisoning the cache tables of the nodes.
+* Prevent vague packets from entering the network thereby helping current SDN enabled networks to perform more efficiently.
+
+
  ````python
 def _handle_PacketIn (self, event):
     packet = event.parsed
@@ -24,4 +30,49 @@ def _handle_PacketIn (self, event):
             print "It's a reply; do something cool"
         else:
             print "Some other ARP opcode, probably do something smart here"
+````
+
+
+
+##Algorithm:
+````
+If FLOW_ENTRY is MATCHED:
+	Send it out to the respective egress port for that flow
+else:
+	Send the packet to the controller
+
+	If OF_PACKET_IN is ARP:
+	
+		src_mac_a = get_src_MAC_from_ARP()
+		src_mac_e = get_src_MAC_from_eth()
+		
+		if src_mac_a != src_mac_e :
+			
+			Detected ARP spoofing, Add an entry to the switch to discard the packets matching the SRC ETH MAC, ARP OPCODE
+			to drop the packets for some timeout.
+			
+		else:
+			MAC addresses matched
+			
+			src_ip = get_src_IP_from_ARP()
+			
+			Check if the src_ip and src_mac_a pair mapping is present at the controller
+			
+			if src_ip and src_mac_a are NOT valid :
+			
+				Detected ARP Spoofing, Add an Entry to the switch to discard the packetd matching the SRC ETH MAC, ARP 					OP CODE for some timeout.
+			else:
+				#VALID
+				
+				Check if the Dest IP exists in the network.
+				
+				if dest_IP NOT in network:
+					
+					Install entry to stop the packets from that host
+				else:
+					## Allow the packets to flood.
+					## INSTALL ENRTY FOR THAT SRC MAC TO FLOOD THE ARP PACKET TO OTHER PORTS
+			
+	else:
+		Compute the route and install the flow entry
 ````
