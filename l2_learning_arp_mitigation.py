@@ -28,16 +28,21 @@ from pox.lib.addresses import IPAddr, IPAddr6, EthAddr
 # Hosts hash table key: HostIP Value: MAC
 hosts = {}
 
-hosts["10.0.0.1"] = "00:00:00:00:00:01";
-hosts["10.0.0.2"] = "00:00:00:00:00:02";
-hosts["10.0.0.3"] = "00:00:00:00:00:03";
-
-
 log = core.getLogger()
 
 # We don't want to flood immediately when a switch connects.
 # Can be overriden on commandline.
 _flood_delay = 0
+
+# DHCP message handler
+def _handle_dhcp_lease(event):
+  print "DHCP Packet \n"
+  print "DHCP packet IP "+str(event.ip)+", MAC: "+str(event.host_mac)
+  # Add this IP and MAC to the hosts dictionary
+  if event.ip != None and event.host_mac != None :
+  	hosts[str(event.ip)] = str(event.host_mac)
+	print "****************  Host "+str(event.ip)+" added! with MAC: "+str(event.host_mac)+"*****************\n"
+
 
 class LearningSwitch (object):
   """
@@ -98,19 +103,24 @@ class LearningSwitch (object):
     #log.debug("Initializing LearningSwitch, transparent=%s",
     #          str(self.transparent))
 
-    # Now add entries for ARP requests and DHCP requests.
+    ######## Now add entries for ARP traffic.######################
     msg = of.ofp_flow_mod()
     msg.match = of.ofp_match(dl_type = pkt.ethernet.ARP_TYPE);
     msg.idle_timeout = of.OFP_FLOW_PERMANENT;
     msg.hard_timeout = of.OFP_FLOW_PERMANENT;
     msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
     self.connection.send(msg)
+	
+	######### Add entries to intercept the DHCP traffic.###########
     msg = of.ofp_flow_mod()
     msg.match = of.ofp_match(nw_proto = 17, tp_src = 67 , tp_dst = 68 );
     msg.idle_timeout = of.OFP_FLOW_PERMANENT;
     msg.hard_timeout = of.OFP_FLOW_PERMANENT;
     msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
     print "Installed flow entries\n"
+
+	########## Register a handler for DHCP lease packets #########
+    core.DHCPD.addListenerByName('DHCPLease',_handle_dhcp_lease)
 
   def _handle_PacketIn (self, event):
     """
@@ -163,10 +173,19 @@ class LearningSwitch (object):
         msg.in_port = event.port
         self.connection.send(msg)
 
-	def handle_spoof(mac=None):
-		print "Spoofing Detected from host "+str(mac)
-		drop()
-
+    def handle_spoof(mac=None):
+        print "**************Spoofing Detected from host with MAC "+str(mac)+" ******************\n"
+        actions = []
+        actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Drop
+        msg = of.ofp_flow_mod(command=of.OFPFC_ADD,
+                                idle_timeout=60, # Drop packets for 60 seconds
+                                hard_timeout=60, # Drop packets for 60 seconds
+                                buffer_id=event.ofp.buffer_id,
+                                actions=actions,
+                                match=of.ofp_match.from_packet(packet,
+                                                               event.port))
+        event.connection.send(msg.pack())
+        print "Installed an entry to drop all the packets from the port"
 
 	# If ARP packet, then check if the packet is spoofed. If its not, then continue with the flow.
     if packet.type == packet.ARP_TYPE:
@@ -189,7 +208,8 @@ class LearningSwitch (object):
 			
 			if src_mac_eth != src_mac_arp :
 				# Spoofing detected
-				drop()
+				#drop()
+				handle_spoof(src_mac_eth)
 				return
 			else:
 				# MAC addresses matched
@@ -197,7 +217,8 @@ class LearningSwitch (object):
 				print "Table MAC : "+hosts[str(src_ip_arp)]+" and mac "+str(src_mac_arp)+"\n";
 				if EthAddr(hosts[str(src_ip_arp)]) != src_mac_arp:
 					print "Spoofing detected: IP and MAC not matched\n"
-					drop()
+					#drop()
+				        handle_spoof(src_mac_eth)
 					print "Dropping\n"
 					return
 				else:
@@ -207,7 +228,8 @@ class LearningSwitch (object):
 					if dst_ip_arp not in hosts.keys():
 						# Spoofing detected
 						print "Spoofing detected: Dest host ip not in table\n"
-						drop()
+						#drop()
+				                handle_spoof(src_mac_eth)
 						return
 					else:
 						if str(dst_mac_eth) == "ff:ff:ff:ff:ff:ff":
@@ -216,6 +238,14 @@ class LearningSwitch (object):
 						else:
 							# ARP Request should be broadcast. Some are unicast sometimes.
 							print "Unicast ARP packet detected\n"
+	# If DHCP, then intercept DHCP Ack packets
+    #elif packet.type == pkt.ethernet.IP_TYPE:	
+	#	if packet.payload.protocol == pkt.ipv4.UDP_PROTOCOL:
+	#		if packet.payload.payload.srcport == pkt.dhcp.SERVER_PORT:
+	#			if packet.payload.payload.dstport == pkt.dhcp.CLIENT_PORT:
+	#				print "DHCP Packet\n"
+
+
 
     self.macToPort[packet.src] = event.port # 1
 
