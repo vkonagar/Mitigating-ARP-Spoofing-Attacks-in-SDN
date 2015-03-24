@@ -76,3 +76,11 @@ else:
 	else:
 		Compute the route and install the flow entry
 ````
+
+### How to Run
+
+run the controller using 
+./pox.py log.level --DEBUG proto.dhcpd --network=10.1.1.0/24 --ip=10.1.1.1 forwarding.l2_learning_arp_mitigation
+
+run the mininet using
+sudo mn --mac --controller remote --topo=single,3
