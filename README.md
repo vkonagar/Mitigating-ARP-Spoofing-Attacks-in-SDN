@@ -1,12 +1,13 @@
 ARP-Cache-Posioning-Attack-Mitigator-SDN
 ========================================
-
-
 Welcome! I am trying to a make an Application over POX in SDN which can help current SDN enabled networks to perform with more resiliency.
 
 * This will prevent LAN attackers from poisoning the cache tables of the nodes.
 * Prevent vague packets from entering the network thereby helping current SDN enabled networks to perform more efficiently.
 
+<a href="http://www.youtube.com/watch?feature=player_embedded&v=ls-LIkGDDbc
+" target="_blank"><img src="http://img.youtube.com/vi/ls-LIkGDDbc/0.jpg" 
+alt="Video" width="240" height="180" border="10" /></a>
 
  ````python
 def _handle_PacketIn (self, event):
@@ -77,5 +78,10 @@ else:
 		Compute the route and install the flow entry
 ````
 
+### How to Run
 
+run the controller using 
+./pox.py log.level --DEBUG proto.dhcpd --network=10.1.1.0/24 --ip=10.1.1.1 forwarding.l2_learning_arp_mitigation
 
+run the mininet using
+sudo mn --mac --controller remote --topo=single,3
