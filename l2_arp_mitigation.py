@@ -25,15 +25,14 @@ import pox.lib.packet as pkt
 import time
 import datetime
 import threading
+from threading import Lock
 from pox.lib.addresses import IPAddr, IPAddr6, EthAddr
 
-# Hosts hash table key: HostIP Value: MAC
-# This is used to keep track of the IP addresses used by the clients
+# Global Hosts IP, MAC hash table 
+# key: HostIP 
+# Value: MAC
+# This keeps track of the IP addresses leased by the DHCP server
 hosts = {}
-
-# ARP Requests state.
-# This hash table is used to store the state of ARP requests sent by the hosts. It stores the timestamp of ARP request message seen.
-requests = {}
 
 log = core.getLogger()
 
@@ -41,12 +40,122 @@ log = core.getLogger()
 # Can be overriden on commandline.
 _flood_delay = 0
 
-# DHCP message handler
-# This is a call back function, called when the dhcp lease event is triggered at the controller.
-def _handle_dhcp_lease(event):
-	# Add the current IP and MAC to the hash table ( hosts )
-	if event.ip != None and event.host_mac != None :
-		hosts[str(event.ip)] = str(event.host_mac)
+class ARPSpoofDetection (object):
+	"""
+	This class implements the ARP spoofing detection and mitigation mechanisms
+	"""
+	# ARP Requests state.
+	# This hash table is used to store the state of ARP requests sent by the hosts.
+	# It stores the timestamp of ARP request message seen.
+	requests = {}
+	
+	# Lock for the requests Hashtable
+	requests_lock = Lock()
+
+	# Monitor thread
+	thread = None
+	
+	@staticmethod
+	def startARPStateMonitor():
+		""" 
+		Starts a new thread to monitor the ARP state table to remove stale entries
+		"""
+		t = threading.Thread(target=ARPSpoofDetection.monitorARPRequests, args = ())
+		t.start()
+
+	@staticmethod
+	def monitorARPRequests():
+  		"""
+  		Removes the stale entries in the ARP state table
+		"""
+		while True:
+			print "Monitoring the arp table every second"
+			time.sleep(1)
+			cur_time = time.time()
+			for i in ARPSpoofDetection.requests.keys():
+				print "Checking the ARP request state of "+str(i)+"\n"
+				# if the request is there for more than 5 seconds, then clean the state
+				if ARPSpoofDetection.requests[i] != None and cur_time - ARPSpoofDetection.requests[i] > 5:
+					ARPSpoofDetection.requests[i] = None
+					print "Cleaned up the state of the request"+str(i)+"\n"
+	@staticmethod
+	def IsSpoofedPacket(packet):
+		"""
+		Input: Packet
+		Output: True --> Spoofing detected
+				False --> No Spoofing
+		This function analyzes the packet and detects if the packet is a spoofed packet
+		"""
+		# If ARP packet, then check if the packet is spoofed. If spoof, install entry to drop packets and return
+		# If its not, then continue with the flow.
+		if packet.type == packet.ARP_TYPE:
+			# Its ARP packet
+			# Copy the src, dst MAC from ethernet headers
+			src_mac_eth = packet.src
+			dst_mac_eth = packet.dst
+			# Copy the src, dst IP and src MAC from the ARP header
+			src_ip_arp = packet.payload.protosrc
+			src_mac_arp = packet.payload.hwsrc 
+			dst_ip_arp = packet.payload.protodst
+			dst_mac_arp = packet.payload.hwdst
+
+			print "Src MAC: "+str(src_mac_eth)+"\n"
+			print "Src MAC ARP: "+str(src_mac_arp)+"\n"
+			print "Dst MAC: "+str(dst_mac_eth)+"\n"
+			print "Dst MAC ARP: "+str(dst_mac_arp)+"\n"
+			print "Src IP ARP: "+str(src_ip_arp)+"\n"
+			print "Dst IP ARP: "+str(dst_ip_arp)+"\n"
+
+			if packet.payload.opcode == pkt.arp.REQUEST:
+				# Its request packet
+				print "Its ARP request\n"
+				if src_mac_eth != src_mac_arp or (EthAddr(hosts[str(src_ip_arp)]) != src_mac_arp) or (dst_ip_arp not in hosts.keys()):
+					print "Spoof detected\n"
+					return True
+				# Store its request IP and src IP present in the ARP header;.
+				ARPSpoofDetection.requests[(src_ip_arp, dst_ip_arp)] = time.time();
+			
+			elif packet.payload.opcode == pkt.arp.REPLY:
+				# Its reply packet
+				if  src_mac_eth != src_mac_arp or dst_mac_eth != dst_mac_arp or EthAddr(hosts[str(src_ip_arp)]) != src_mac_arp or EthAddr(hosts[str(dst_ip_arp)]) != dst_mac_arp or str(dst_mac_eth) == "ff:ff:ff:ff:ff:ff" :
+					# Spoofing detected.
+					return True
+				# Acquire the lock and check the requests
+				"""
+				ARPSpoofDetection.requests_lock.acquire()
+				# Check if the reply is already sent!
+				try:
+					if ARPSpoofDetection.requests[(dst_ip_arp, src_ip_arp)] != None:
+						# Initialize back to default for next ARP request.
+						ARPSpoofDetection.requests[(dst_ip_arp, src_ip_arp)] = None
+						ARPSpoofDetection.requests_lock.release()
+					else:
+						ARPSpoofDetection.requests_lock.release()
+						return True
+				except KeyError:
+					# Key not present
+					ARPSpoofDetection.requests_lock.release()
+					return True
+				"""
+		return False
+
+	@staticmethod
+	def handleSpoofing(event, packet, mac=None):
+		"""
+		Function which is called when the ARP spoofing is detected. 
+		This will install a flow entry to drop the packets coming from a port to filter out the malicious packets
+		"""
+		actions = []
+		actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Drop
+		msg = of.ofp_flow_mod(command=of.OFPFC_ADD,
+                                idle_timeout = 10, # Drop packets for 10 idle seconds
+                                hard_timeout = 60, # Drop packets for 60 seconds
+                                buffer_id=event.ofp.buffer_id,
+                                actions=actions,
+                                match=of.ofp_match.from_packet(packet,
+                                                               event.port))
+		event.connection.send(msg.pack())
+		print "Installed an entry to drop all the packets from the port"
 
 class LearningSwitch (object):
 	"""
@@ -88,15 +197,23 @@ class LearningSwitch (object):
 	 flow goes out the appopriate port
 	 6a) Send the packet out appropriate port
 	"""
+	def _handle_dhcp_lease(self, event):
+		"""
+		DHCP lease event handler. It is a callback function, which is invoked whenever the DHCP server leases an IP address to a host
+		"""
+		# Add the current IP and MAC to the hash table ( hosts )
+		if event.ip != None and event.host_mac != None :
+			hosts[str(event.ip)] = str(event.host_mac)
+	
 	def __init__ (self, connection, transparent):
     
 		# Switch we'll be adding L2 learning switch capabilities to
 		self.connection = connection
 		self.transparent = transparent
-		
-		# Our table
+
+		# Our Switch table
 		self.macToPort = {}
-		
+
 		# We want to hear PacketIn messages, so we listen
 		# to the connection
 		connection.addListeners(self)
@@ -126,7 +243,7 @@ class LearningSwitch (object):
 		
 		# Register a handler for DHCP IP lease at the controller.
 		# This is called when DHCP lease is given by the controller DHCP server.
-		core.DHCPD.addListenerByName('DHCPLease',_handle_dhcp_lease)
+		core.DHCPD.addListenerByName('DHCPLease',self._handle_dhcp_lease)
 
 	def _handle_PacketIn (self, event):
 		"""
@@ -176,78 +293,11 @@ class LearningSwitch (object):
 				msg.in_port = event.port
 				self.connection.send(msg)
 
-		def handle_spoof(mac=None):
-			"""
-			Function which is called when the ARP spoofing is detected. 
-			This will install a flow entry to drop the packets coming from a port to filter out the malicious packets
-			"""
-			actions = []
-			actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Drop
-			msg = of.ofp_flow_mod(command=of.OFPFC_ADD,
-                                idle_timeout = 10, # Drop packets for 10 idle seconds
-                                hard_timeout = 60, # Drop packets for 60 seconds
-                                buffer_id=event.ofp.buffer_id,
-                                actions=actions,
-                                match=of.ofp_match.from_packet(packet,
-                                                               event.port))
-			event.connection.send(msg.pack())
-			print "Installed an entry to drop all the packets from the port"
-		# @@@@@@@@ Start here!! @@@@@@@@
-		# If ARP packet, then check if the packet is spoofed. If spoof, install entry to drop packets and return
-		# If its not, then continue with the flow.
-		if packet.type == packet.ARP_TYPE:
-			# Its ARP packet
-			# Copy the src, dst MAC from ethernet headers
-			src_mac_eth = packet.src
-			dst_mac_eth = packet.dst
-			# Copy the src, dst IP and src MAC from the ARP header
-			src_ip_arp = packet.payload.protosrc
-			src_mac_arp = packet.payload.hwsrc 
-			dst_ip_arp = packet.payload.protodst
-			dst_mac_arp = packet.payload.hwdst
-
-			if packet.payload.opcode == pkt.arp.REQUEST:
-				# Its request packet
-				
-				if src_mac_eth != src_mac_arp :
-					handle_spoof(src_mac_eth)
-					return
-				elif EthAddr(hosts[str(src_ip_arp)]) != src_mac_arp :
-					handle_spoof(src_mac_eth)
-				elif dst_ip_arp not in hosts.keys():
-					handle_spoof(src_mac_eth)
-
-				# Store its request IP and src IP present in the ARP header;.
-				requests[(src_ip_arp, dst_ip_arp)] = time.time();
-			
-			elif packet.payload.opcode == pkt.arp.REPLY:
-				# Its reply packet
-				if src_mac_eth != src_mac_arp :
-					# Spoofing detected
-					handle_spoof(src_mac_eth)
-				elif dst_mac_eth != dst_mac_arp : 
-					# Spoofing detected
-					handle_spoof(src_mac_eth)
-				elif EthAddr(hosts[str(src_ip_arp)]) != src_mac_arp :
-					# Spoofing detected
-					handle_spoof(src_mac_eth)
-				elif EthAddr(hosts[str(dst_ip_arp)]) != dst_mac_arp :
-					# Spoofing detected
-					handle_spoof(src_mac_eth)
-
-				# Check if its unicast. Reply should always be unicast. Request may be broadcast
-				if str(dst_mac_eth) == "ff:ff:ff:ff:ff:ff" :
-					# Its not unicast
-					# Spoofing detected.
-					handle_spoof(src_mac_eth)
-
-				# Check if the reply is already sent!
-				if requests[(dst_ip_arp, src_ip_arp)] == None :
-					handle_spoof(src_mac_eth)
-					return
-				# Initialize back to default for next ARP request.
-				requests[(dst_ip_arp, src_ip_arp)] = None
-	
+		# Check ARP Spoofing
+		if ARPSpoofDetection.IsSpoofedPacket(packet) :
+			# Spoofing detected
+			print "*******************SPOOFING DETECTED**********************\n"
+			ARPSpoofDetection.handleSpoofing(event, packet)
 		# Valid packet, do processing.
 		self.macToPort[packet.src] = event.port # 1
 		if not self.transparent: # 2
@@ -279,20 +329,43 @@ class LearningSwitch (object):
 			self.connection.send(msg)
 
 class l2_learning (object):
- 	"""
-  	Waits for OpenFlow switches to connect and makes them learning switches.
+	"""
+		This is the Controller Class, which gets the events from the switches.
+  		Waits for OpenFlow switches to connect and makes them learning switches.
   	"""
+
 	def __init__ (self, transparent):
   		core.openflow.addListeners(self)
 		self.transparent = transparent
+		self.hosts = {}
 		# Spawn a thread to monitor the ARP request state
-		t = threading.Thread(target=monitor_arp_requests, args = ())
-		t.start()
+		# ARPSpoofDetection.startARPStateMonitor()
 
-  	def _handle_ConnectionUp (self, event):
+	def _handle_core_ComponentRegistered (self, event):
+		if event.name == "host_tracker":
+			event.component.addListenerByName("HostEvent",self.__handle_host_tracker_HostEvent)
+  	
+	def __handle_host_tracker_HostEvent (self, event):
+		h = str(event.entry.macaddr)
+		s = dpid_to_str(event.entry.dpid)
+		if event.leave:
+			# Host leaving, delete the entry
+			if h in self.hosts:
+				del self.hosts[h]
+		else:
+			# Add (host,switch) to the hosts hash table
+			self.hosts[h] = s
+			print "Host "+h+" Added to "+s
+
+	def _handle_ConnectionUp (self, event):
 		print "SWITCH CONNECTED\n\n"
 		log.debug("Connection %s" % (event.connection,))
 		sw = LearningSwitch(event.connection, self.transparent)
+
+	def _handle_HostEvent (self, event):
+		print "Host connected\n"
+		print event.entry
+		print "\n"
 
 def launch (transparent=False, hold_down=_flood_delay):
   	"""
@@ -305,18 +378,3 @@ def launch (transparent=False, hold_down=_flood_delay):
 	except:
 		raise RuntimeError("Expected hold-down to be a number")
 	core.registerNew(l2_learning, str_to_bool(transparent))
-
-def monitor_arp_requests ():
-  	"""
- 	 Starts a new thread which monitors the ARP requests state hash table.
-  	"""
-	while True:
-		print "Monitoring the arp table every second"
-		time.sleep(1)
-		cur_time = time.time()
-		for i in requests.keys():
-			print "Checking the ARP request state of "+str(i)+"\n"
-			# if the request is there for more than 5 seconds, then clean the state
-			if requests[i] != None and cur_time - requests[i] > 5:
-				requests[i] = None
-				print "Cleaned up the state of the request"+str(i)+"\n"
