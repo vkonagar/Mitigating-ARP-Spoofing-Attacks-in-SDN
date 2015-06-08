@@ -68,15 +68,6 @@ class ARPSpoofDetection (object):
 			
 			if packet.payload.opcode == pkt.arp.REQUEST:
 				# Its request packet
-				print "Its ARP request\n"
-				print "Spoof detected\n"
-				print "Src MAC: "+src_mac_eth+"\n"
-				print "Src MAC ARP: "+src_mac_arp+"\n"
-				print "Dst MAC: "+dst_mac_eth+"\n"
-				print "Dst MAC ARP: "+dst_mac_arp+"\n"
-				print "Src IP ARP: "+src_ip_arp+"\n"
-				print "Dst IP ARP: "+dst_ip_arp+"\n"
-				print "Hosts[src_ip_arp]: "+hosts[src_ip_arp]+"\n"
 				if dst_ip_arp in hosts.keys():
 					print "Dest IP in table\n"
 				if src_mac_eth != src_mac_arp or (hosts[src_ip_arp] != src_mac_arp) or (dst_ip_arp not in hosts.keys()):
@@ -108,8 +99,6 @@ class ARPSpoofDetection (object):
                                                                event.port))
 		event.connection.send(msg.pack())
 		print "Installed an entry to drop all the packets from the port"
-		log.debug("installing flow for %s.%i -> %s to DROP" % (packet.src, event.port, packet.dst))
-		
 
 class LearningSwitch (object):
 	"""
@@ -155,13 +144,14 @@ class LearningSwitch (object):
 		"""
 		DHCP lease event handler. It is a callback function, which is invoked whenever the DHCP server leases an IP address to a host
 		"""
+		print "Lease event handler"+str(event.ip)+" "+str(event.host_mac)
 		# Add the current IP and MAC to the hash table ( hosts )
 		if event.ip != None and event.host_mac != None :
 			hosts[str(event.ip)] = str(event.host_mac)
+			print str(event.ip)+" Added to the table\n"
 
 	def monitorPorts(self):
 		while True:
-			print "Monitoring\n"
 			time.sleep(0.5)
 			self.mutex.acquire()
 			try:
@@ -193,7 +183,10 @@ class LearningSwitch (object):
 		# Switch we'll be adding L2 learning switch capabilities to
 		self.connection = connection
 		self.transparent = transparent
-	
+
+		# Check the type of the switch
+		self.isEdgeSwitch = True
+
 		# Create one thread to monitor the ARP packets on the ports.
 
 		t = threading.Thread(target=self.monitorPorts, args = ())
@@ -240,6 +233,7 @@ class LearningSwitch (object):
 		
 		# Register a handler for DHCP IP lease at the controller.
 		# This is called when DHCP lease is given by the controller DHCP server.
+		print "DCHP LISTENER ADDED\n"
 		core.DHCPD.addListenerByName('DHCPLease',self._handle_dhcp_lease)
 
 	def _handle_PacketIn (self, event):
@@ -302,7 +296,7 @@ class LearningSwitch (object):
 			self.mutex.release()
 			
 		# Check ARP Spoofing
-		if ARPSpoofDetection.IsSpoofedPacket(packet) :
+		if self.isEdgeSwitch and ARPSpoofDetection.IsSpoofedPacket(packet) :
 			# Spoofing detected
 			print "*******************SPOOFING DETECTED**********************\n"
 			ARPSpoofDetection.handleSpoofing(event, packet)
@@ -340,6 +334,26 @@ class LearningSwitch (object):
 			msg.data = event.ofp # 6a
 			self.connection.send(msg)
 
+class Monitor (object):
+	"""
+	This has the monitor functions, which can show the controller details
+	"""
+	def __init__(self):
+		self.thread = threading.Thread(target=self.monitorThread, args = ())
+		self.thread.start()
+
+	def monitorThread(self):	
+		while True:
+			print "Enter 1 to print Hosts->(IP,MAC) Table\n"
+			inp = str(raw_input())
+			if inp == "1":
+				self.printIPMACTable()
+			else:
+				print "Sorry. Invalid Option\n"
+	def printIPMACTable(self):
+		for ip in hosts.keys():
+			print "IP : "+ip+" MAC: "+hosts[ip]+"\n"
+
 class l2_learning (object):
 	"""
 		This is the Controller Class, which gets the events from the switches.
@@ -348,16 +362,20 @@ class l2_learning (object):
 
 	def __init__ (self, transparent):
   		core.openflow.addListeners(self)
+		core.listen_to_dependencies(self)
 		self.transparent = transparent
 		self.hosts = {}
-		# Spawn a thread to monitor the ARP request state
-		# ARPSpoofDetection.startARPStateMonitor()
+		# CLI
+		m = Monitor()
+		log.debug("Monitor added\n")
 
 	def _handle_core_ComponentRegistered (self, event):
 		if event.name == "host_tracker":
+			print "@@@@@@@@@@@@@@@@HOST TRACKER\n"
 			event.component.addListenerByName("HostEvent",self.__handle_host_tracker_HostEvent)
   	
 	def __handle_host_tracker_HostEvent (self, event):
+		print "HOST TRACKet HOST EVENT\n"
 		h = str(event.entry.macaddr)
 		s = dpid_to_str(event.entry.dpid)
 		if event.leave:
@@ -375,13 +393,13 @@ class l2_learning (object):
 		sw = LearningSwitch(event.connection, self.transparent)
 
 	def _handle_HostEvent (self, event):
-		print "Host connected\n"
+		print "Host connected@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
 		print event.entry
 		print "\n"
 
 def launch (transparent=False, hold_down=_flood_delay):
   	"""
-  	Starts an L2 learning switch.
+  		Starts an L2 learning switch.
   	"""
   	try:
 		global _flood_delay
