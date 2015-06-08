@@ -42,101 +42,49 @@ _flood_delay = 0
 
 class ARPSpoofDetection (object):
 	"""
-	This class implements the ARP spoofing detection and mitigation mechanisms
+		This class implements the ARP spoofing detection and mitigation mechanisms.
 	"""
-	# ARP Requests state.
-	# This hash table is used to store the state of ARP requests sent by the hosts.
-	# It stores the timestamp of ARP request message seen.
-	requests = {}
-	
-	# Lock for the requests Hashtable
-	requests_lock = Lock()
-
-	# Monitor thread
-	thread = None
-	
-	@staticmethod
-	def startARPStateMonitor():
-		""" 
-		Starts a new thread to monitor the ARP state table to remove stale entries
-		"""
-		t = threading.Thread(target=ARPSpoofDetection.monitorARPRequests, args = ())
-		t.start()
-
-	@staticmethod
-	def monitorARPRequests():
-  		"""
-  		Removes the stale entries in the ARP state table
-		"""
-		while True:
-			print "Monitoring the arp table every second"
-			time.sleep(1)
-			cur_time = time.time()
-			for i in ARPSpoofDetection.requests.keys():
-				print "Checking the ARP request state of "+str(i)+"\n"
-				# if the request is there for more than 5 seconds, then clean the state
-				if ARPSpoofDetection.requests[i] != None and cur_time - ARPSpoofDetection.requests[i] > 5:
-					ARPSpoofDetection.requests[i] = None
-					print "Cleaned up the state of the request"+str(i)+"\n"
 	@staticmethod
 	def IsSpoofedPacket(packet):
+		
 		"""
-		Input: Packet
-		Output: True --> Spoofing detected
-				False --> No Spoofing
-		This function analyzes the packet and detects if the packet is a spoofed packet
+			Input: Packet
+			Output: True --> Spoofing detected
+					False --> No Spoofing
+			This function analyzes the packet and detects if the packet is a spoofed packet
 		"""
 		# If ARP packet, then check if the packet is spoofed. If spoof, install entry to drop packets and return
 		# If its not, then continue with the flow.
 		if packet.type == packet.ARP_TYPE:
 			# Its ARP packet
 			# Copy the src, dst MAC from ethernet headers
-			src_mac_eth = packet.src
-			dst_mac_eth = packet.dst
+			src_mac_eth = str(packet.src)
+			dst_mac_eth = str(packet.dst)
 			# Copy the src, dst IP and src MAC from the ARP header
-			src_ip_arp = packet.payload.protosrc
-			src_mac_arp = packet.payload.hwsrc 
-			dst_ip_arp = packet.payload.protodst
-			dst_mac_arp = packet.payload.hwdst
-
-			print "Src MAC: "+str(src_mac_eth)+"\n"
-			print "Src MAC ARP: "+str(src_mac_arp)+"\n"
-			print "Dst MAC: "+str(dst_mac_eth)+"\n"
-			print "Dst MAC ARP: "+str(dst_mac_arp)+"\n"
-			print "Src IP ARP: "+str(src_ip_arp)+"\n"
-			print "Dst IP ARP: "+str(dst_ip_arp)+"\n"
-
+			src_ip_arp = str(packet.payload.protosrc)
+			src_mac_arp = str(packet.payload.hwsrc) 
+			dst_ip_arp = str(packet.payload.protodst)
+			dst_mac_arp = str(packet.payload.hwdst)
+			
 			if packet.payload.opcode == pkt.arp.REQUEST:
 				# Its request packet
 				print "Its ARP request\n"
-				if src_mac_eth != src_mac_arp or (EthAddr(hosts[str(src_ip_arp)]) != src_mac_arp) or (dst_ip_arp not in hosts.keys()):
-					print "Spoof detected\n"
+				print "Spoof detected\n"
+				print "Src MAC: "+src_mac_eth+"\n"
+				print "Src MAC ARP: "+src_mac_arp+"\n"
+				print "Dst MAC: "+dst_mac_eth+"\n"
+				print "Dst MAC ARP: "+dst_mac_arp+"\n"
+				print "Src IP ARP: "+src_ip_arp+"\n"
+				print "Dst IP ARP: "+dst_ip_arp+"\n"
+				if src_mac_eth != src_mac_arp or (hosts[src_ip_arp] != src_mac_arp) or (dst_ip_arp not in hosts.keys()):
 					return True
-				# Store its request IP and src IP present in the ARP header;.
-				ARPSpoofDetection.requests[(src_ip_arp, dst_ip_arp)] = time.time();
-			
+				
 			elif packet.payload.opcode == pkt.arp.REPLY:
 				# Its reply packet
-				if  src_mac_eth != src_mac_arp or dst_mac_eth != dst_mac_arp or EthAddr(hosts[str(src_ip_arp)]) != src_mac_arp or EthAddr(hosts[str(dst_ip_arp)]) != dst_mac_arp or str(dst_mac_eth) == "ff:ff:ff:ff:ff:ff" :
+				print "Its ARP reply"
+				if (src_mac_eth != src_mac_arp) or (dst_mac_eth != dst_mac_arp) or (hosts[src_ip_arp] != src_mac_arp) or (hosts[dst_ip_arp] != dst_mac_arp) or (dst_mac_eth == "ff:ff:ff:ff:ff:ff") :
 					# Spoofing detected.
 					return True
-				# Acquire the lock and check the requests
-				"""
-				ARPSpoofDetection.requests_lock.acquire()
-				# Check if the reply is already sent!
-				try:
-					if ARPSpoofDetection.requests[(dst_ip_arp, src_ip_arp)] != None:
-						# Initialize back to default for next ARP request.
-						ARPSpoofDetection.requests[(dst_ip_arp, src_ip_arp)] = None
-						ARPSpoofDetection.requests_lock.release()
-					else:
-						ARPSpoofDetection.requests_lock.release()
-						return True
-				except KeyError:
-					# Key not present
-					ARPSpoofDetection.requests_lock.release()
-					return True
-				"""
 		return False
 
 	@staticmethod
@@ -156,6 +104,8 @@ class ARPSpoofDetection (object):
                                                                event.port))
 		event.connection.send(msg.pack())
 		print "Installed an entry to drop all the packets from the port"
+		log.debug("installing flow for %s.%i -> %s to DROP" % (packet.src, event.port, packet.dst))
+		
 
 class LearningSwitch (object):
 	"""
@@ -298,6 +248,10 @@ class LearningSwitch (object):
 			# Spoofing detected
 			print "*******************SPOOFING DETECTED**********************\n"
 			ARPSpoofDetection.handleSpoofing(event, packet)
+			# Done with this ARP packet
+			return
+
+		
 		# Valid packet, do processing.
 		self.macToPort[packet.src] = event.port # 1
 		if not self.transparent: # 2
