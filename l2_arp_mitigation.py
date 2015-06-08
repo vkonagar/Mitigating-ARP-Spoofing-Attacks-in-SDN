@@ -76,6 +76,9 @@ class ARPSpoofDetection (object):
 				print "Dst MAC ARP: "+dst_mac_arp+"\n"
 				print "Src IP ARP: "+src_ip_arp+"\n"
 				print "Dst IP ARP: "+dst_ip_arp+"\n"
+				print "Hosts[src_ip_arp]: "+hosts[src_ip_arp]+"\n"
+				if dst_ip_arp in hosts.keys():
+					print "Dest IP in table\n"
 				if src_mac_eth != src_mac_arp or (hosts[src_ip_arp] != src_mac_arp) or (dst_ip_arp not in hosts.keys()):
 					return True
 				
@@ -100,6 +103,7 @@ class ARPSpoofDetection (object):
                                 hard_timeout = 60, # Drop packets for 60 seconds
                                 buffer_id=event.ofp.buffer_id,
                                 actions=actions,
+								priority=100,
                                 match=of.ofp_match.from_packet(packet,
                                                                event.port))
 		event.connection.send(msg.pack())
@@ -154,15 +158,55 @@ class LearningSwitch (object):
 		# Add the current IP and MAC to the hash table ( hosts )
 		if event.ip != None and event.host_mac != None :
 			hosts[str(event.ip)] = str(event.host_mac)
+
+	def monitorPorts(self):
+		while True:
+			print "Monitoring\n"
+			time.sleep(0.5)
+			self.mutex.acquire()
+			try:
+				for port in self.portARPCount.keys():
+					if self.portARPCount[port] > 100 :
+						self.stopARPPacketsOnPort(port)
+						print "Stop packets on PORT "+str(port)
+					self.portARPCount[port] = 0
+			finally:
+				self.mutex.release()
 	
+	def stopARPPacketsOnPort(self, port):
+		
+		actions = []
+		my_match = of.ofp_match()
+		my_match.in_port = port
+		actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Drop
+		msg = of.ofp_flow_mod(command=of.OFPFC_ADD,
+                                idle_timeout = 10, # Drop packets for 10 idle seconds
+                                hard_timeout = 60, # Drop packets for 60 seconds
+                                actions=actions,
+								priority=100,
+                                match=my_match)
+		self.connection.send(msg.pack())
+		print "Installed an entry to drop all the packets from the port"
+		
 	def __init__ (self, connection, transparent):
     
 		# Switch we'll be adding L2 learning switch capabilities to
 		self.connection = connection
 		self.transparent = transparent
+	
+		# Create one thread to monitor the ARP packets on the ports.
+
+		t = threading.Thread(target=self.monitorPorts, args = ())
+		t.start()
+
+		# Switch Port ARP count Table
+		self.portARPCount = {}
 
 		# Our Switch table
 		self.macToPort = {}
+
+		# Mutex for port ARP count Table
+		self.mutex = Lock()
 
 		# We want to hear PacketIn messages, so we listen
 		# to the connection
@@ -180,6 +224,7 @@ class LearningSwitch (object):
 		msg.match = of.ofp_match(dl_type = pkt.ethernet.ARP_TYPE);
 		msg.idle_timeout = of.OFP_FLOW_PERMANENT;
 		msg.hard_timeout = of.OFP_FLOW_PERMANENT;
+		msg.priority = 10
 		msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
 		self.connection.send(msg)
 		
@@ -189,7 +234,9 @@ class LearningSwitch (object):
 		msg.match = of.ofp_match(nw_proto = 17, tp_src = 67 , tp_dst = 68 );
 		msg.idle_timeout = of.OFP_FLOW_PERMANENT;
 		msg.hard_timeout = of.OFP_FLOW_PERMANENT;
+		msg.priority = 10
 		msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
+		self.connection.send(msg)
 		
 		# Register a handler for DHCP IP lease at the controller.
 		# This is called when DHCP lease is given by the controller DHCP server.
@@ -235,6 +282,7 @@ class LearningSwitch (object):
 				msg.match = of.ofp_match.from_packet(packet)
 				msg.idle_timeout = duration[0]
 				msg.hard_timeout = duration[1]
+				msg.priority = 100 
 				msg.buffer_id = event.ofp.buffer_id
 				self.connection.send(msg)
 			elif event.ofp.buffer_id is not None:
@@ -243,6 +291,16 @@ class LearningSwitch (object):
 				msg.in_port = event.port
 				self.connection.send(msg)
 
+		if packet.type == packet.ARP_TYPE:
+			# Increase the Port ARP count.
+			self.mutex.acquire()
+			try:
+				self.portARPCount[event.port] += 1
+			except KeyError:
+				self.portARPCount[event.port] = 0
+			print "\nARP count for Port "+str(event.port)+" "+str(self.portARPCount[event.port])
+			self.mutex.release()
+			
 		# Check ARP Spoofing
 		if ARPSpoofDetection.IsSpoofedPacket(packet) :
 			# Spoofing detected
