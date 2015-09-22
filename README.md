@@ -1,4 +1,4 @@
-ARP-Cache-Posioning-Attack-Mitigator-SDN
+ARP-Cache-Poisoning-Attack-Mitigator-SDN
 ========================================
 Welcome! I am trying to a make an Application over POX in SDN which can help current SDN enabled networks to perform with more resiliency.
 
