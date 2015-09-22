@@ -70,7 +70,11 @@ class ARPSpoofDetection (object):
 				# Its request packet
 				if dst_ip_arp in hosts.keys():
 					print "Dest IP in table\n"
-				if src_mac_eth != src_mac_arp or (hosts[src_ip_arp] != src_mac_arp) or (dst_ip_arp not in hosts.keys()):
+				else:
+					print "Dest IP not in the known hosts table"
+					return True
+				if src_mac_eth != src_mac_arp or (hosts[src_ip_arp] != src_mac_arp):
+					print "Problem with matching src MAC and src IP or hosts[src_ip_arp] != src_mac_arp"
 					return True
 				
 			elif packet.payload.opcode == pkt.arp.REPLY:
@@ -78,6 +82,7 @@ class ARPSpoofDetection (object):
 				print "Its ARP reply"
 				if (src_mac_eth != src_mac_arp) or (dst_mac_eth != dst_mac_arp) or (hosts[src_ip_arp] != src_mac_arp) or (hosts[dst_ip_arp] != dst_mac_arp) or (dst_mac_eth == "ff:ff:ff:ff:ff:ff") :
 					# Spoofing detected.
+					print "Problem with the reply"
 					return True
 		return False
 
@@ -183,7 +188,6 @@ class LearningSwitch (object):
 		# Switch we'll be adding L2 learning switch capabilities to
 		self.connection = connection
 		self.transparent = transparent
-
 		# Check the type of the switch
 		self.isEdgeSwitch = True
 
@@ -298,25 +302,29 @@ class LearningSwitch (object):
 		# Check ARP Spoofing
 		if self.isEdgeSwitch and ARPSpoofDetection.IsSpoofedPacket(packet) :
 			# Spoofing detected
-			print "*******************SPOOFING DETECTED**********************\n"
+			time_d = time.time()
+			print "*******************SPOOFING DETECTED at "+str(time_d)+" **********************\n"
 			ARPSpoofDetection.handleSpoofing(event, packet)
 			# Done with this ARP packet
 			return
 
-		
+		print "Valid packet"		
 		# Valid packet, do processing.
 		self.macToPort[packet.src] = event.port # 1
 		if not self.transparent: # 2
-			if packet.type == packet.LLDP_TYPE or packet.dst.isBridgeFiltered():
+				print "Dropped because the mode is transparent"
 				drop() # 2a
 				return
 		if packet.dst.is_multicast:
+		  print "Flooding due to the multicast dest address present in the header"
 		  flood() # 3a
 		else:
 		  if packet.dst not in self.macToPort: # 4
+			print "Flooding"
 			flood("Port for %s unknown -- flooding" % (packet.dst,)) # 4a
 		  else:
 			port = self.macToPort[packet.dst]
+		  	print "Port for dest MAC "+str(packet.dst)+" is "+str(port)
 			if port == event.port: # 5
 			  # 5a
 			  log.warning("Same port for packet from %s -> %s on %s.%s.  Drop."
@@ -397,7 +405,7 @@ class l2_learning (object):
 		print event.entry
 		print "\n"
 
-def launch (transparent=False, hold_down=_flood_delay):
+def launch (transparent=True, hold_down=_flood_delay):
   	"""
   		Starts an L2 learning switch.
   	"""
