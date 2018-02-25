@@ -1,6 +1,6 @@
 ARP-Cache-Poisoning-Attack-Mitigator-SDN
 ========================================
-Welcome! I wrote an Application over POX in SDN which can help current SDN enabled networks to mitigate the ARP spoofing attack. This work is copyrighted and is published in ICCTA, Alexandria, Egypt.
+ARP Spoofing mitigation module on POX SDN controller. 
 
 ## Features
 * This will prevent LAN attackers from poisoning the cache tables of the nodes.
