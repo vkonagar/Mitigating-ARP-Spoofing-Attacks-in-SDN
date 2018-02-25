@@ -10,7 +10,7 @@ ARP Spoofing mitigation module on POX SDN controller.
 ## Setup
 * ARPspoofperf.py is used for creating the test topology with the proposed solution.
 * ARPspoofperfwithoutsol.py is for creating the test topology without the solution. 
-* l2_learning_arp_mitigation.py is the ARP mitigation module on POX controller.
+* l2_learning_arp_mitigation.py has the ARP mitigation module on POX controller.
 
 ## Video describing the project.
 <a href="http://www.youtube.com/watch?feature=player_embedded&v=ls-LIkGDDbc
