@@ -17,7 +17,7 @@ ARP Spoofing mitigation module on POX SDN controller.
 alt="Video" width="240" height="180" border="10" /></a>
 
 ## Algorithm:
-For algorithm, please refer to the paper.
+For algorithm, please refer to the paper <a href="https://www.researchgate.net/publication/299369116_Mitigating_ARP_Spoofing_Attacks_in_Software-Defined_Networks?_iepl%5BviewId%5D=Ah14uCiK19XDsPku33yZOkTs&_iepl%5BsingleItemViewId%5D=E4OuHPAwOl16ntLuC6ZpQHWc&_iepl%5BpositionInFeed%5D=26&_iepl%5BhomeFeedVariantCode%5D=nb_EU&_iepl%5BactivityId%5D=823512512204810&_iepl%5BactivityType%5D=person_add_publication&_iepl%5BactivityTimestamp%5D=1490781883&_iepl%5Bcontexts%5D%5B0%5D=homeFeed&_iepl%5BtargetEntityId%5D=PB%3A299369116&_iepl%5BinteractionType%5D=publicationTitle"> Paper </a>
 
 ### How to Run
 * Run the POX controller using 
